@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI 考試準備平台</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 16px; }
+    .hidden { display: none; }
+    .panel { border: 1px solid #ccc; padding: 12px; margin-bottom: 16px; border-radius: 6px; }
+    label { display: inline-block; width: 80px; }
+    input[type=text], input[type=password] { width: 220px; margin-bottom: 8px; }
+    .button { margin-top: 8px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+    th, td { border: 1px solid #ddd; padding: 6px; text-align: left; }
+  </style>
+</head>
+<body>
+  <h1>AI 研究所考試準備平台</h1>
+
+  <div id="loginPanel" class="panel">
+    <h2>登入 / 註冊</h2>
+    <div>
+      <label>帳號</label><input id="username" type="text" />
+    </div>
+    <div>
+      <label>密碼</label><input id="password" type="password" />
+    </div>
+    <button id="btnLogin">登入</button>
+    <button id="btnRegister">註冊</button>
+    <div id="loginMsg" style="color: red; margin-top: 8px;"></div>
+  </div>
+
+  <div id="appPanel" class="hidden">
+    <p>已登入：<strong id="currentUser"></strong> | <a href="#" id="logout">登出</a></p>
+    <div class="panel">
+      <h2>題庫管理</h2>
+      <div>
+        <label>題目</label><input id="newQuestionContent" type="text" />
+      </div>
+      <div>
+        <label>主題</label><input id="newQuestionTopic" type="text" />
+      </div>
+      <button id="btnAddQuestion">新增題目</button>
+      <table>
+        <thead><tr><th>ID</th><th>內容</th><th>主題</th><th>操作</th></tr></thead>
+        <tbody id="questionsBody"></tbody>
+      </table>
+    </div>
+
+    <div class="panel">
+      <h2>錯題紀錄</h2>
+      <button id="btnRefreshMistakes">更新錯題列表</button>
+      <table>
+        <thead><tr><th>ID</th><th>使用者</th><th>題目</th><th>主題</th></tr></thead>
+        <tbody id="mistakesBody"></tbody>
+      </table>
+    </div>
+
+    <div class="panel">
+      <h2>標記錯題</h2>
+      <div>
+        <label>題目ID</label><input id="mistakeQuestionId" type="text" />
+      </div>
+      <button id="btnAddMistake">新增錯題</button>
+    </div>
+
+    <div id="appMsg" style="color: green;"></div>
+  </div>
+
+  <script>
+    const baseUrl = 'http://localhost:3000';
+    const loginPanel = document.querySelector('#loginPanel');
+    const appPanel = document.querySelector('#appPanel');
+    const currentUserEl = document.querySelector('#currentUser');
+    const loginMsg = document.querySelector('#loginMsg');
+    const appMsg = document.querySelector('#appMsg');
+
+    function setMessage(el, msg) { el.textContent = msg; setTimeout(() => el.textContent = '', 4000); }
+
+    function getStored() {
+      return JSON.parse(localStorage.getItem('ai_grad_app') || 'null');
+    }
+
+    function storeSession(session) {
+      localStorage.setItem('ai_grad_app', JSON.stringify(session));
+    }
+
+    function clearSession() {
+      localStorage.removeItem('ai_grad_app');
+    }
+
+    async function setLoggedIn(session) {
+      if (!session) {
+        loginPanel.classList.remove('hidden');
+        appPanel.classList.add('hidden');
+        return;
+      }
+      loginPanel.classList.add('hidden');
+      appPanel.classList.remove('hidden');
+      currentUserEl.textContent = session.user.username;
+      await loadQuestions();
+      await loadMistakes();
+    }
+
+    async function login(isRegister = false) {
+      const username = document.querySelector('#username').value.trim();
+      const password = document.querySelector('#password').value.trim();
+      if (!username || !password) {
+        setMessage(loginMsg, '帳號密碼不得為空。');
+        return;
+      }
+
+      try {
+        const url = isRegister ? '/auth/register' : '/auth/login';
+        const res = await fetch(baseUrl + url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+          setMessage(loginMsg, data.error || '操作失敗。');
+          return;
+        }
+
+        storeSession({ user: data.user, token: data.token });
+        setLoggedIn({ user: data.user, token: data.token });
+      } catch (err) {
+        setMessage(loginMsg, '無法連線到後端。');
+      }
+    }
+
+    async function loadQuestions() {
+      const res = await fetch(baseUrl + '/questions');
+      const data = await res.json();
+      const tbody = document.querySelector('#questionsBody');
+      tbody.innerHTML = '';
+      data.forEach((q) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${q.id}</td><td>${q.content}</td><td>${q.topic}</td><td><button data-id="${q.id}" class="mark-mistake">標為錯題</button></td>`;
+        tbody.appendChild(tr);
+      });
+      document.querySelectorAll('.mark-mistake').forEach((btn) => {
+        btn.addEventListener('click', async (e) => {
+          const id = e.target.dataset.id;
+          document.querySelector('#mistakeQuestionId').value = id;
+          await addMistake();
+        });
+      });
+    }
+
+    async function loadMistakes() {
+      const session = getStored();
+      let url = baseUrl + '/mistakes';
+      if (session) {
+        url += `?user_id=${session.user.id}`;
+      }
+      const res = await fetch(url);
+      const data = await res.json();
+      const tbody = document.querySelector('#mistakesBody');
+      tbody.innerHTML = '';
+      data.forEach((m) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${m.id}</td><td>${m.username || m.user_id}</td><td>${m.question_content || m.question_id}</td><td>${m.question_topic || '-'}</td>`;
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function addQuestion() {
+      const content = document.querySelector('#newQuestionContent').value.trim();
+      const topic = document.querySelector('#newQuestionTopic').value.trim();
+      if (!content || !topic) {
+        setMessage(appMsg, '題目與主題為必填。');
+        return;
+      }
+      try {
+        const res = await fetch(baseUrl + '/questions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content, topic }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setMessage(appMsg, data.error || '新增題目失敗。');
+          return;
+        }
+        setMessage(appMsg, '新增題目成功。');
+        document.querySelector('#newQuestionContent').value = '';
+        document.querySelector('#newQuestionTopic').value = '';
+        await loadQuestions();
+      } catch (err) {
+        setMessage(appMsg, '無法連線至後端。');
+      }
+    }
+
+    async function addMistake() {
+      const session = getStored();
+      if (!session) {
+        setMessage(appMsg, '請先登入。');
+        return;
+      }
+      const question_id = parseInt(document.querySelector('#mistakeQuestionId').value.trim(), 10);
+      if (!question_id) {
+        setMessage(appMsg, '請輸入有效題目ID。');
+        return;
+      }
+      try {
+        const res = await fetch(baseUrl + '/mistakes', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: session.user.id, question_id }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setMessage(appMsg, data.error || '新增錯題失敗。');
+          return;
+        }
+        setMessage(appMsg, '新增錯題成功。');
+        document.querySelector('#mistakeQuestionId').value = '';
+        await loadMistakes();
+      } catch (err) {
+        setMessage(appMsg, '無法連線至後端。');
+      }
+    }
+
+    document.querySelector('#btnLogin').addEventListener('click', () => login(false));
+    document.querySelector('#btnRegister').addEventListener('click', () => login(true));
+    document.querySelector('#logout').addEventListener('click', (event) => { event.preventDefault(); clearSession(); setLoggedIn(null); });
+    document.querySelector('#btnAddQuestion').addEventListener('click', addQuestion);
+    document.querySelector('#btnRefreshMistakes').addEventListener('click', loadMistakes);
+    document.querySelector('#btnAddMistake').addEventListener('click', addMistake);
+
+    setLoggedIn(getStored());
+  </script>
+</body>
+</html>
